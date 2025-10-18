@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Image Tool Pro",
+  "version": "1.0",
+  "description": "Get image URL and remove backgrounds",
+  "permissions": [
+    "contextMenus",
+    "storage",
+    "clipboardWrite",
+    "scripting",
+    "action",
+    "downloads",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  }
+}
