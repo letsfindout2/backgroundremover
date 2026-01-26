@@ -32,6 +32,79 @@ async function uploadToImgBB(base64Data) {
   }
 }
 
+// Convert base64 data URL to Blob URL
+function createBlobUrlFromBase64(dataUrl) {
+  try {
+    const response = fetch(dataUrl)
+      .then(res => res.blob())
+      .then(blob => URL.createObjectURL(blob));
+    return response;
+  } catch (error) {
+    console.error('Error creating blob URL:', error);
+    return null;
+  }
+}
+
+// Reusable function to remove background from an image URL
+async function removeBackgroundFromImage(imageUrl, removeBgKey) {
+  // If the image data is in base64 format, convert it to a Blob URL
+  let processedImageUrl = imageUrl;
+  if (imageUrl.startsWith('data:')) {
+    const blobUrl = await createBlobUrlFromBase64(imageUrl);
+    if (blobUrl) {
+      processedImageUrl = blobUrl;
+    } else {
+      throw new Error('Failed to convert image data to URL');
+    }
+  }
+
+  // Verify the API key is valid
+  const verifyResponse = await fetch('https://api.remove.bg/v1.0/account', {
+    headers: {
+      'X-Api-Key': removeBgKey
+    }
+  });
+
+  if (!verifyResponse.ok) {
+    throw new Error('Invalid API key. Please check your Remove.bg API key');
+  }
+
+  // Call remove.bg API
+  const response = await fetch('https://api.remove.bg/v1.0/removebg', {
+    method: 'POST',
+    headers: {
+      'X-Api-Key': removeBgKey,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      image_url: processedImageUrl,
+      size: 'auto',
+      format: 'png',
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.errors?.[0]?.title || 'Failed to remove background');
+  }
+
+  // Get the binary data
+  const imageData = await response.arrayBuffer();
+  const blob = new Blob([imageData], { type: 'image/png' });
+
+  // Convert to base64
+  const base64data = await new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result);
+    reader.readAsDataURL(blob);
+  });
+
+  // Upload to ImgBB to get permanent URL
+  const permanentUrl = await uploadToImgBB(base64data);
+
+  return permanentUrl;
+}
+
 // Create the context menu item
 chrome.runtime.onInstalled.addListener(() => {
   // Remove existing menu items to avoid duplicates
@@ -54,7 +127,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       
       // If the image data is in base64 format, convert it to a Blob URL
       if (info.srcUrl.startsWith('data:')) {
-        const blobUrl = createBlobUrlFromBase64(info.srcUrl);
+        const blobUrl = await createBlobUrlFromBase64(info.srcUrl);
         if (blobUrl) {
           info.srcUrl = blobUrl;
         } else {
@@ -72,49 +145,8 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
         await chrome.action.setBadgeBackgroundColor({ color: '#FFA000' });
 
         try {
-          // First, verify the API key is valid
-          const verifyResponse = await fetch('https://api.remove.bg/v1.0/account', {
-            headers: {
-              'X-Api-Key': result.removeBgKey
-            }
-          });
-
-          if (!verifyResponse.ok) {
-            throw new Error('Invalid API key. Please check your Remove.bg API key');
-          }
-
-          // Call remove.bg API
-          const response = await fetch('https://api.remove.bg/v1.0/removebg', {
-            method: 'POST',
-            headers: {
-              'X-Api-Key': result.removeBgKey,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              image_url: info.srcUrl,
-              size: 'auto',
-              format: 'png',
-            }),
-          });
-
-          if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.errors?.[0]?.title || 'Failed to remove background');
-          }
-
-          // Get the binary data
-          const imageData = await response.arrayBuffer();
-          const blob = new Blob([imageData], { type: 'image/png' });
-
-          // Convert to base64
-          const base64data = await new Promise((resolve) => {
-            const reader = new FileReader();
-            reader.onloadend = () => resolve(reader.result);
-            reader.readAsDataURL(blob);
-          });
-
-          // Upload to ImgBB to get permanent URL
-          const permanentUrl = await uploadToImgBB(base64data);
+          // Use the reusable function
+          const permanentUrl = await removeBackgroundFromImage(info.srcUrl, result.removeBgKey);
 
           // Copy the URL directly to clipboard
           await chrome.scripting.executeScript({
@@ -210,5 +242,76 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
         chrome.action.setBadgeText({ text: '' });
       }, 2000);
     }
+  }
+});
+
+// Handle messages from content scripts (e.g., Gympal integration)
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.action === 'removeBackground') {
+    // Handle background removal request from content script
+    (async () => {
+      try {
+        // Get API key from storage
+        const result = await chrome.storage.local.get(['removeBgKey']);
+        
+        if (!result.removeBgKey) {
+          sendResponse({ 
+            success: false, 
+            error: 'Please set your Remove.bg API key in the extension settings' 
+          });
+          return;
+        }
+
+        // Show processing badge
+        await chrome.action.setBadgeText({ text: '⏳' });
+        await chrome.action.setBadgeBackgroundColor({ color: '#FFA000' });
+
+        try {
+          // Use the reusable function to remove background
+          const permanentUrl = await removeBackgroundFromImage(request.imageUrl, result.removeBgKey);
+
+          // Show success badge
+          await chrome.action.setBadgeText({ text: '✓' });
+          await chrome.action.setBadgeBackgroundColor({ color: '#4CAF50' });
+
+          // Clear badge after delay
+          setTimeout(() => {
+            chrome.action.setBadgeText({ text: '' });
+          }, 2000);
+
+          sendResponse({ 
+            success: true, 
+            imageUrl: permanentUrl 
+          });
+        } catch (apiError) {
+          console.error('API Error:', apiError);
+          await chrome.action.setBadgeText({ text: '!' });
+          await chrome.action.setBadgeBackgroundColor({ color: '#F44336' });
+          setTimeout(() => {
+            chrome.action.setBadgeText({ text: '' });
+          }, 2000);
+          
+          sendResponse({ 
+            success: false, 
+            error: apiError.message 
+          });
+        }
+      } catch (error) {
+        console.error('Error:', error);
+        await chrome.action.setBadgeText({ text: '!' });
+        await chrome.action.setBadgeBackgroundColor({ color: '#F44336' });
+        setTimeout(() => {
+          chrome.action.setBadgeText({ text: '' });
+        }, 2000);
+        
+        sendResponse({ 
+          success: false, 
+          error: error.message 
+        });
+      }
+    })();
+    
+    // Return true to indicate we will send a response asynchronously
+    return true;
   }
 });

@@ -21,5 +21,12 @@
   "background": {
     "service_worker": "background.js",
     "type": "module"
-  }
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://web.gympal.com/*"],
+      "js": ["gympal.js"],
+      "run_at": "document_idle"
+    }
+  ]
 }
