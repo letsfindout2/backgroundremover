@@ -9,6 +9,11 @@ A Chrome extension that helps you quickly grab image URLs and optionally remove 
 - Automatic upload of processed images to ImgBB for permanent hosting
 - Quick copy to clipboard with notification
 - Support for both regular images and base64 encoded images
+- **Gympal Integration**: Automatic "Remove Background" button injection on web.gympal.com Edit Product modals
+  - One-click background removal directly in the Gympal interface
+  - Undo functionality to restore original images
+  - Toast notifications for better user feedback
+  - URL validation and error handling
 
 ## Setup
 
@@ -28,6 +33,7 @@ A Chrome extension that helps you quickly grab image URLs and optionally remove 
 
 ## Usage
 
+### General Usage
 1. Right-click on any image on a webpage
 2. Select "Get image URL"
 3. If background removal is enabled:
@@ -36,12 +42,21 @@ A Chrome extension that helps you quickly grab image URLs and optionally remove 
    - The permanent URL will be automatically copied to your clipboard
 4. A brief notification will confirm when the URL is copied
 
+### Gympal Integration
+When using [web.gympal.com](https://web.gympal.com):
+1. Navigate to the Edit Product modal
+2. Enter an image URL in the Image URL field
+3. Click the "✨ Remove Background" button that appears automatically
+4. The background will be removed and the URL will be updated automatically
+5. Use the "↶ Undo" button to restore the original image if needed
+
 ## Files
 
 - `manifest.json`: Extension configuration and permissions
-- `background.js`: Core processing logic, API integrations
+- `background.js`: Core processing logic, API integrations, message handlers
 - `popup.html`: Extension popup interface
 - `popup.js`: Popup interaction logic
+- `gympal.js`: Content script for Gympal website integration
 
 ## API Integration
 
