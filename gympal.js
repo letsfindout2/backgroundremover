@@ -6,6 +6,7 @@
 
   // Store original URL for undo functionality
   let originalImageUrl = null;
+  let isInternalImageUpdate = false;
 
   // Toast notification function
   function showToast(message, type = 'info') {
@@ -134,15 +135,37 @@
       flex-wrap: wrap;
     `;
 
-    // Create the Remove Background button
-    const removeBgButton = document.createElement('button');
-    removeBgButton.id = 'gympal-remove-bg-btn';
-    removeBgButton.type = 'button';
-    removeBgButton.setAttribute('aria-label', 'Remove background from image');
-    removeBgButton.textContent = '✨ Remove Background';
-    removeBgButton.style.cssText = `
+    // Create the Remove Background (only) button
+    const removeBgOnlyButton = document.createElement('button');
+    removeBgOnlyButton.id = 'gympal-remove-bg-only-btn';
+    removeBgOnlyButton.type = 'button';
+    removeBgOnlyButton.setAttribute('aria-label', 'Remove background from image');
+    removeBgOnlyButton.textContent = '✨ Remove BG only';
+    removeBgOnlyButton.style.cssText = `
       padding: 8px 16px;
       background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 500;
+      transition: all 0.2s;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+    `;
+
+    // Create the Remove Background + Resize to fill button
+    const removeBgFillButton = document.createElement('button');
+    removeBgFillButton.id = 'gympal-remove-bg-fill-btn';
+    removeBgFillButton.type = 'button';
+    removeBgFillButton.setAttribute('aria-label', 'Remove background and resize image to fill');
+    removeBgFillButton.textContent = '✨ Remove BG + Fill';
+    removeBgFillButton.style.cssText = `
+      padding: 8px 16px;
+      background: linear-gradient(135deg, #0ea5e9 0%, #2563eb 100%);
       color: white;
       border: none;
       border-radius: 6px;
@@ -179,7 +202,7 @@
     `;
 
     // Add hover effects
-    [removeBgButton, undoButton].forEach(btn => {
+    [removeBgOnlyButton, removeBgFillButton, undoButton].forEach(btn => {
       btn.addEventListener('mouseenter', () => {
         if (!btn.disabled) {
           btn.style.transform = 'translateY(-1px)';
@@ -192,8 +215,7 @@
       });
     });
 
-    // Handle Remove Background click event
-    removeBgButton.addEventListener('click', async () => {
+    async function handleRemoveBackground(mode, buttonEl) {
       const currentImageUrl = imageInput.value?.trim();
       
       // Validate URL
@@ -207,12 +229,13 @@
       originalImageUrl = currentImageUrl;
 
       // Disable button and show loading state
-      removeBgButton.disabled = true;
+      removeBgOnlyButton.disabled = true;
+      removeBgFillButton.disabled = true;
       undoButton.disabled = true;
-      const originalText = removeBgButton.textContent;
-      removeBgButton.textContent = '⏳ Processing...';
-      removeBgButton.style.opacity = '0.7';
-      removeBgButton.style.cursor = 'not-allowed';
+      const originalText = buttonEl.textContent;
+      buttonEl.textContent = '⏳ Processing...';
+      buttonEl.style.opacity = '0.7';
+      buttonEl.style.cursor = 'not-allowed';
       
       showToast('Removing background... This may take a few seconds', 'info');
 
@@ -220,16 +243,21 @@
         // Send message to background script to process the image
         const response = await chrome.runtime.sendMessage({
           action: 'removeBackground',
-          imageUrl: currentImageUrl
+          imageUrl: currentImageUrl,
+          mode
         });
 
         if (response && response.success) {
           // Update the input field with the new URL
+          isInternalImageUpdate = true;
           imageInput.value = response.imageUrl;
           
           // Trigger input event to notify any listeners
           imageInput.dispatchEvent(new Event('input', { bubbles: true }));
           imageInput.dispatchEvent(new Event('change', { bubbles: true }));
+          setTimeout(() => {
+            isInternalImageUpdate = false;
+          }, 0);
 
           // Update the preview image if it exists
           const previewImg = parentContainer.querySelector('img[alt="product"]');
@@ -244,16 +272,20 @@
           }
 
           // Show success feedback
-          removeBgButton.textContent = '✓ Background Removed!';
-          removeBgButton.style.background = 'linear-gradient(135deg, #4CAF50 0%, #45a049 100%)';
+          buttonEl.textContent = mode === 'fill256' ? '✓ Removed + Filled!' : '✓ Background Removed!';
+          buttonEl.style.background = 'linear-gradient(135deg, #4CAF50 0%, #45a049 100%)';
           showToast('Background removed successfully!', 'success');
           
           // Show undo button
           undoButton.style.display = 'inline-flex';
           
           setTimeout(() => {
-            removeBgButton.textContent = originalText;
-            removeBgButton.style.background = 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
+            buttonEl.textContent = originalText;
+            if (mode === 'fill256') {
+              buttonEl.style.background = 'linear-gradient(135deg, #0ea5e9 0%, #2563eb 100%)';
+            } else {
+              buttonEl.style.background = 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
+            }
           }, 2000);
         } else {
           throw new Error(response?.error || 'Failed to remove background');
@@ -262,26 +294,42 @@
         console.error('Error removing background:', error);
         const errorMsg = error.message || 'An unexpected error occurred';
         showToast(errorMsg, 'error');
-        removeBgButton.textContent = '❌ Error - Try Again';
+        buttonEl.textContent = '❌ Error - Try Again';
         setTimeout(() => {
-          removeBgButton.textContent = originalText;
+          buttonEl.textContent = originalText;
         }, 2000);
       } finally {
-        removeBgButton.disabled = false;
+        removeBgOnlyButton.disabled = false;
+        removeBgFillButton.disabled = false;
         undoButton.disabled = false;
-        removeBgButton.style.opacity = '1';
-        removeBgButton.style.cursor = 'pointer';
+        buttonEl.style.opacity = '1';
+        buttonEl.style.cursor = 'pointer';
       }
+
+    }
+
+    // Handle Remove BG only click event
+    removeBgOnlyButton.addEventListener('click', async () => {
+      await handleRemoveBackground('bgOnly', removeBgOnlyButton);
+    });
+
+    // Handle Remove BG + Fill click event
+    removeBgFillButton.addEventListener('click', async () => {
+      await handleRemoveBackground('fill256', removeBgFillButton);
     });
 
     // Handle Undo click event
     undoButton.addEventListener('click', () => {
       if (originalImageUrl) {
+        isInternalImageUpdate = true;
         imageInput.value = originalImageUrl;
         
         // Trigger input event to notify any listeners
         imageInput.dispatchEvent(new Event('input', { bubbles: true }));
         imageInput.dispatchEvent(new Event('change', { bubbles: true }));
+        setTimeout(() => {
+          isInternalImageUpdate = false;
+        }, 0);
 
         // Update the preview image if it exists
         const previewImg = parentContainer.querySelector('img[alt="product"]');
@@ -298,10 +346,17 @@
     });
 
     // Add keyboard support
-    removeBgButton.addEventListener('keydown', (e) => {
+    removeBgOnlyButton.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
-        removeBgButton.click();
+        removeBgOnlyButton.click();
+      }
+    });
+
+    removeBgFillButton.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        removeBgFillButton.click();
       }
     });
 
@@ -313,7 +368,8 @@
     });
 
     // Append buttons to container
-    buttonContainer.appendChild(removeBgButton);
+    buttonContainer.appendChild(removeBgOnlyButton);
+    buttonContainer.appendChild(removeBgFillButton);
     buttonContainer.appendChild(undoButton);
 
     // Insert container after the label container
@@ -377,18 +433,15 @@
   urlObserver.observe(document, { subtree: true, childList: true });
 
   // Watch for input changes to reset undo button if user manually changes URL
-  const inputObserver = new MutationObserver(() => {
-    const imageInput = document.querySelector('input[id="image"][name="details.image"]');
-    if (imageInput) {
-      imageInput.addEventListener('input', () => {
-        const undoBtn = document.getElementById('gympal-undo-btn');
-        if (undoBtn && imageInput.value !== originalImageUrl) {
-          undoBtn.style.display = 'none';
-          originalImageUrl = null;
-        }
-      }, { once: false });
+  document.addEventListener('input', (e) => {
+    if (isInternalImageUpdate) return;
+    const target = e.target;
+    if (!target || target.id !== 'image' || target.name !== 'details.image') return;
+    const undoBtn = document.getElementById('gympal-undo-btn');
+    if (undoBtn && originalImageUrl && target.value !== originalImageUrl) {
+      undoBtn.style.display = 'none';
+      originalImageUrl = null;
     }
-  });
-  inputObserver.observe(document.body, { childList: true, subtree: true });
+  }, true);
 
 })();

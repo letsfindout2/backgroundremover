@@ -45,8 +45,93 @@ function createBlobUrlFromBase64(dataUrl) {
   }
 }
 
+// Resize image to 256x256 using OffscreenCanvas (works in service workers)
+async function resizeImageTo256x256(blob) {
+  try {
+    // Create ImageBitmap from blob
+    const imageBitmap = await createImageBitmap(blob);
+    
+    // Step 1: Find bounding box of non-transparent pixels (crop transparent padding)
+    const tempCanvas = new OffscreenCanvas(imageBitmap.width, imageBitmap.height);
+    const tempCtx = tempCanvas.getContext('2d');
+    tempCtx.drawImage(imageBitmap, 0, 0);
+    
+    const imageData = tempCtx.getImageData(0, 0, imageBitmap.width, imageBitmap.height);
+    const data = imageData.data;
+    
+    let minX = imageBitmap.width;
+    let minY = imageBitmap.height;
+    let maxX = 0;
+    let maxY = 0;
+    
+    // Find bounds of non-transparent pixels
+    for (let y = 0; y < imageBitmap.height; y++) {
+      for (let x = 0; x < imageBitmap.width; x++) {
+        const alpha = data[(y * imageBitmap.width + x) * 4 + 3];
+        if (alpha > 0) { // Non-transparent pixel
+          minX = Math.min(minX, x);
+          minY = Math.min(minY, y);
+          maxX = Math.max(maxX, x);
+          maxY = Math.max(maxY, y);
+        }
+      }
+    }
+    
+    // If no non-transparent pixels found, use full image
+    if (minX >= maxX || minY >= maxY) {
+      minX = 0;
+      minY = 0;
+      maxX = imageBitmap.width;
+      maxY = imageBitmap.height;
+    }
+    
+    const cropWidth = maxX - minX + 1;
+    const cropHeight = maxY - minY + 1;
+    
+    // Step 2: Create cropped image
+    const croppedCanvas = new OffscreenCanvas(cropWidth, cropHeight);
+    const croppedCtx = croppedCanvas.getContext('2d');
+    croppedCtx.drawImage(imageBitmap, minX, minY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+    
+    // Step 3: Resize cropped product to fill 256x256
+    const finalCanvas = new OffscreenCanvas(256, 256);
+    const finalCtx = finalCanvas.getContext('2d');
+    
+    // Calculate scale to fill 256x256 (may crop edges but product fills canvas)
+    const scale = Math.max(256 / cropWidth, 256 / cropHeight);
+    const scaledWidth = cropWidth * scale;
+    const scaledHeight = cropHeight * scale;
+    const x = (256 - scaledWidth) / 2;
+    const y = (256 - scaledHeight) / 2;
+    
+    // Draw cropped product scaled to fill canvas
+    finalCtx.drawImage(croppedCanvas, x, y, scaledWidth, scaledHeight);
+    
+    // Convert canvas to blob
+    const resizedBlob = await finalCanvas.convertToBlob({ type: 'image/png' });
+    
+    // Clean up
+    imageBitmap.close();
+    
+    return resizedBlob;
+  } catch (error) {
+    console.error('Error resizing image:', error);
+    throw new Error('Failed to resize image: ' + error.message);
+  }
+}
+
+async function blobToDataUrl(blob) {
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Failed to read image data'));
+    reader.onloadend = () => resolve(reader.result);
+    reader.readAsDataURL(blob);
+  });
+}
+
 // Reusable function to remove background from an image URL
-async function removeBackgroundFromImage(imageUrl, removeBgKey) {
+async function removeBackgroundFromImage(imageUrl, removeBgKey, options = {}) {
+  const mode = options.mode || 'fill256';
   // If the image data is in base64 format, convert it to a Blob URL
   let processedImageUrl = imageUrl;
   if (imageUrl.startsWith('data:')) {
@@ -92,12 +177,10 @@ async function removeBackgroundFromImage(imageUrl, removeBgKey) {
   const imageData = await response.arrayBuffer();
   const blob = new Blob([imageData], { type: 'image/png' });
 
+  const outputBlob = mode === 'fill256' ? await resizeImageTo256x256(blob) : blob;
+
   // Convert to base64
-  const base64data = await new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onloadend = () => resolve(reader.result);
-    reader.readAsDataURL(blob);
-  });
+  const base64data = await blobToDataUrl(outputBlob);
 
   // Upload to ImgBB to get permanent URL
   const permanentUrl = await uploadToImgBB(base64data);
@@ -174,10 +257,6 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
             },
             args: [permanentUrl]
           });
-
-          // Show success badge
-          await chrome.action.setBadgeText({ text: '✓' });
-          await chrome.action.setBadgeBackgroundColor({ color: '#4CAF50' });
 
           // Show success badge
           await chrome.action.setBadgeText({ text: '✓' });
@@ -268,13 +347,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         try {
           // Use the reusable function to remove background
-          const permanentUrl = await removeBackgroundFromImage(request.imageUrl, result.removeBgKey);
+          const permanentUrl = await removeBackgroundFromImage(request.imageUrl, result.removeBgKey, {
+            mode: request.mode || 'fill256'
+          });
 
           // Show success badge
           await chrome.action.setBadgeText({ text: '✓' });
           await chrome.action.setBadgeBackgroundColor({ color: '#4CAF50' });
-
-          // Clear badge after delay
           setTimeout(() => {
             chrome.action.setBadgeText({ text: '' });
           }, 2000);
